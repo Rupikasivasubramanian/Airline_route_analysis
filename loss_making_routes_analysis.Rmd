@@ -1,0 +1,745 @@
+---
+title: "Loss_making_route_analysis"
+author: "Rupikasiva"
+date: "2026-03-10"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(pROC)
+library(caret)
+library(naniar)
+library(corrplot)
+
+```
+
+## Loading the datatset
+
+```{r echo=FALSE}
+airline_df <- read.csv("airline_route_profitability.csv")
+head(airline_df)
+summary(airline_df)
+dim(airline_df)
+
+#Checking missing Values
+missing_value <- colSums(is.na(airline_df))
+view(missing_value)
+
+vis_miss(airline_df) +
+  scale_fill_manual(
+    values = c("lightblue", "darkblue"),
+    labels = c("Present (99.7%)", "Missing (0.3%)")
+  ) + 
+  labs (title= "Missing Data Pattern", fill = "Data Status") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Removing missing values since they are relatively very low and does not affect the output variable
+airline_df <- na.omit(airline_df)
+colSums(is.na(airline_df))
+
+#Histogram for Profit analysis
+hist(airline_df$Profit, main="Histogram of Profit", xlab = "Profit", ylab = "Frequency")
+hist(airline_df$Profit_Margin, main="Histogram of Profit Margin", xlab = "Profit", ylab = "Frequency")
+
+#Proceeding with Profit Margin
+airline_df$route_classification <- ifelse(airline_df$Profit_Margin < 0, "Loss",
+                                          ifelse(airline_df$Profit_Margin < 5, "Marginal","Profitable"))
+view(airline_df)
+
+```
+
+This is the profit and loss analysis for the routes
+```{r echo=FALSE}
+#Checking route counts under each category
+
+table(airline_df$route_classification)
+
+library(dplyr)
+library(knitr)
+library(kableExtra)
+
+route_summary <- airline_df %>%
+  count(route_classification) %>%
+  arrange(desc(n)) %>%
+  rename(
+    "Route Classification" = route_classification,
+    "Number of Routes" = n
+  )
+
+kable(route_summary, caption = "Distribution of Route Classification") %>%
+  kable_styling(full_width = FALSE, position = "center")
+
+#Listing top 10 loss making routes with profit
+#airline_df[order(airline_df$Profit), ][1:10, ]
+
+#Listing top 10 loss making routes with Profit Margin
+lowest_profit_margin <- airline_df %>%
+  arrange(Profit_Margin) %>%
+  slice(1:10) %>%
+  select(Route, Route_Category, Demand_Level, Load_Factor,
+         Flight_Hours, Total_Revenue, Total_Cost,
+         Profit, Profit_Margin)
+colnames(lowest_profit_margin) <- c("Route", "Category", "Demand",
+                            "Load Factor", "Flight Hours",
+                            "Revenue", "Cost", "Profit", "Profit_Margin")
+  
+  
+kable(lowest_profit_margin, caption = "Top 10 loss making routes with Profit Margin")
+#loss making routes are mostly short haul routes and the demand level is medium, and season is normal, 
+
+
+library(knitr)
+library(dplyr)
+
+lowest_profit_margin <- airline_df %>%
+  arrange(Profit_Margin) %>%
+  slice(1:10) %>%
+  select(Route, Route_Category, Demand_Level, Load_Factor,
+         Flight_Hours, Total_Revenue, Total_Cost,
+         Profit, Profit_Margin)
+
+colnames(lowest_profit_margin) <- c("Route", "Category", "Demand",
+                                   "Load Factor", "Flight Hours",
+                                   "Revenue", "Cost", 
+                                   "Profit", "Profit Margin")
+
+kable(lowest_profit_margin,
+      caption = "Top 10 Loss Making Routes by Profit Margin",
+      digits = 2) %>%
+  kable_styling(
+    full_width = FALSE,
+    bootstrap_options = c("bordered")
+  )
+
+
+
+
+```
+Checking which cost variable contributes to the loss and profit making routes
+
+
+```{r echo=FALSE}
+cost_df <- airline_df %>%
+  filter(route_classification %in% c("Loss", "Profitable"))
+
+# Checking which cost variable contributes to the loss and profit making routes
+cost_summary <- cost_df %>%
+  group_by(route_classification) %>%
+  summarise(
+    Fuel_Cost = mean(Fuel_Cost),
+    Crew_Cost = mean(Crew_Cost),
+    Maintenance_Cost = mean(Maintenance_Cost),
+    Airport_Fees = mean(Airport_Fees),
+    Catering_Cost = mean(Catering_Cost),
+    Handling_Cost = mean(Handling_Cost),
+    Overhead_Cost = mean(Overhead_Cost),
+    Marketing_Cost = mean(Marketing_Cost)
+  ) %>%
+  pivot_longer(
+    cols = -route_classification,
+    names_to = "Cost_Category",
+    values_to = "Average_Cost"
+  )
+
+ggplot(cost_summary, aes(x = Cost_Category, y = Average_Cost, fill = route_classification)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Average Costs: Loss vs Profitable Routes",
+    x = "Cost Category",
+    y = "Average Cost",
+    fill = "Route Group"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Checking Cost as percentage of Total Revenue
+
+cost_pctg_df <- cost_df %>%
+  mutate(
+    Fuel_pctg = Fuel_Cost / Total_Revenue * 100,
+    Crew_pctg = Crew_Cost / Total_Revenue * 100,
+    Maintenance_pctg = Maintenance_Cost / Total_Revenue * 100,
+    Airport_pctg = Airport_Fees / Total_Revenue * 100,
+    Catering_pctg = Catering_Cost / Total_Revenue * 100,
+    Handling_pctg = Handling_Cost / Total_Revenue * 100,
+    Overhead_pctg = Overhead_Cost / Total_Revenue * 100,
+    Marketing_pctg = Marketing_Cost / Total_Revenue * 100
+  ) %>%
+  group_by(route_classification) %>%
+  summarise(
+    Fuel_pctg = mean(Fuel_pctg),
+    Crew_pctg = mean(Crew_pctg),
+    Maintenance_pctg = mean(Maintenance_pctg),
+    Airport_pctg = mean(Airport_pctg),
+    Catering_pctg = mean(Catering_pctg),
+    Handling_pctg = mean(Handling_pctg),
+    Overhead_pctg = mean(Overhead_pctg),
+    Marketing_pctg = mean(Marketing_pctg)
+  ) %>%
+  pivot_longer(
+    cols = -route_classification,
+    names_to = "Cost_Category",
+    values_to = "Average_Percent_Revenue"
+  )
+
+ggplot(cost_pctg_df, aes(x = Cost_Category, y = Average_Percent_Revenue, fill = route_classification)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Average Cost Components as Percentage of Revenue",
+    x = "Cost Category",
+    y = "Average Cost (Percentage of Total Revenue)",
+    fill = "Route Group"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+Heat map 
+
+```{r}
+# Step 1 - Select only numeric variables relevant to analysis
+numeric_vars <- airline_df[, c("Profit_Margin", 
+                                "Load_Factor", 
+                                "Flight_Hours",
+                                "Passengers",
+                                "Aircraft_Capacity",
+                                "Ticket_Revenue",
+                                "Total_Revenue",
+                                "Fuel_Cost",
+                                "Total_Cost",
+                                "Profit")]
+
+# Step 2 - Calculate correlation matrix
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+
+# Step 3 - Plot the heatmap
+corrplot(cor_matrix, 
+         method = "color", 
+         type = "upper",            
+         addCoef.col = "black",     
+         tl.col = "black",          
+         tl.srt = 45,               
+         number.cex = 0.7,          
+         title = "Correlation Heatmap of Numeric Variables",
+         mar = c(0,0,1,0)         
+)
+```
+
+
+
+
+
+Checking different factors that affect the routes
+
+```{r echo=FALSE}
+
+route_colors <- c(
+  "Loss" = "#08306B",        # dark blue
+  "Marginal" = "#4292C6",    # medium blue
+  "Profitable" = "#C6DBEF"   # light blue
+)
+
+
+
+
+#Ticket Revenue Vs Route Classification
+ggplot(airline_df, aes(x = route_classification, y = Ticket_Revenue, fill = route_classification)) +
+  geom_boxplot() +
+  scale_fill_manual(values = route_colors) +
+  labs(
+    title = "Ticket Revenue by Route Classification",
+    x = "Route Group",
+    y = "Ticket Revenue"
+  ) +
+  theme_minimal()
+
+#Demand level Vs Route Classification
+ggplot(airline_df, aes(x = Demand_Level, fill = route_classification)) +
+  geom_bar(position = "dodge") +
+  scale_fill_manual(values = route_colors) +
+  labs(
+    title = "Demand Level by Route Classification",
+    x = "Demand level",
+    y = "No of Routes",
+    fill = "Route Classification"
+  ) +
+  theme_minimal()
+
+#Season Vs Route Classification
+
+ggplot(airline_df, aes(x = Season, fill = route_classification)) +
+  geom_bar(position = "dodge") +
+  scale_fill_manual(values = route_colors) +
+  labs(
+    title = "Route Classification across Seasons",
+    x = "Season",
+    y = "Number of Routes",
+    fill = "Route Classification"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+
+#Load Factor Vs Route Classification
+loadfactor <- ggplot(airline_df, aes(x = route_classification, y = Load_Factor, fill = route_classification)) +
+  geom_boxplot() +
+  scale_fill_manual(values = route_colors) +
+  labs(
+    title = "Load Factor Distribution",
+    x = "Route Group",
+    y = "Load Factor"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("Load_factor_plot.png", plot = loadfactor, width = 7.55, height = 7, units = "cm")
+```
+
+Few more features Vs Route Classification
+
+
+```{r echo=FALSE}
+#Flight Hours Vs Route classification
+ggplot(airline_df, aes(x= route_classification, y = Flight_Hours, fill = route_classification))+
+  geom_boxplot() +
+  scale_fill_manual(values = route_colors) +
+  labs(
+    title = "Flight Hours by Route Classification",
+    x = "Route Classification",
+    y = "Flight Hours"
+  ) +
+  theme_minimal()
+
+
+#route category Vs route classification
+ggplot(airline_df, aes(x = Route_Category, fill = route_classification)) +
+  geom_bar(position = "dodge") +
+  scale_fill_manual(values = route_colors) +
+  labs(
+    title = "Route Classification by Route Category",
+    x = "Route Category",
+    y = "Number of Routes",
+    fill = "Route Classification"
+  ) +
+  theme_minimal()
+
+#Aircraft Type Vs Route Classification
+
+aircraft_type <- ggplot(airline_df, aes(x = Aircraft_Type, fill = route_classification)) +
+  geom_bar(position = "dodge") +
+  scale_fill_manual(values = route_colors) +
+  labs(
+    title = "Route Classification by Aircraft Type",
+    x = "Aircraft Type",
+    y = "Number of Routes",
+    fill = "Route Classification"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("aircraft_type.png", plot = aircraft_type, width = 9.33, height = 5.85, units = "cm")
+
+
+#Flight Hours Vs Profit Margin
+
+profit_margin <- ggplot(airline_df, aes(x = Flight_Hours, y = Profit_Margin, color = route_classification)) +
+  geom_jitter(alpha = 0.4, width = 0.2, height = 0) +
+  scale_color_manual(values = route_colors) +
+  labs(
+    title = "Profit Margin vs Flight Hours",
+    x = "Flight Hours",
+    y = "Profit Margin",
+    color = "Route Classification"
+  ) +
+  theme_minimal()
+
+ggsave("profit_margin_plot.png", plot = profit_margin , width = 9.35, height = 9, units = "cm")
+
+
+```
+
+Logistic regression for predicting the profit or loss route classification with the analysed factors
+
+Model 1
+
+```{r echo=FALSE}
+#Defining the binary variable 0 - Profit 1 - Loss
+airline_df$loss_factor <- ifelse(airline_df$route_classification == "Loss", 1, 0)
+
+#Train and Test - Data splitting
+set.seed(1)
+
+train_ind <- sample(1:nrow(airline_df), size = nrow(airline_df)*0.8)
+
+df_train <- airline_df[train_ind, ]
+df_test <- airline_df[-train_ind, ]
+
+#Using operational features as per EDA done earlier
+logreg.fit <- glm(loss_factor ~ Load_Factor + Flight_Hours +
+                   Route_Category + Aircraft_Type + Demand_Level +
+                   Season,
+                   data = df_train,
+                   family = binomial)
+
+summary(logreg.fit)
+
+pred_prob <- predict(logreg.fit, newdata = df_test, type = "response")
+head(pred_prob)
+pred_class <- ifelse(pred_prob > 0.5, 1, 0)
+head(pred_class)
+
+table(Predicted = pred_class, Actual = df_test$loss_factor)
+
+confusionMatrix(as.factor(pred_class),
+                as.factor(df_test$loss_factor),
+                positive = "1")
+
+
+roc_obj <- roc(df_test$loss_factor, pred_prob)
+auc_value <- auc(roc_obj)
+
+plot(roc_obj,
+     col = "blue",
+     main = "ROC Curve for Route Loss Prediction")
+
+legend("bottomright",
+       legend = paste("AUC =", round(auc_value,3)))
+
+```
+Model 2 - aircraft capacity and removing demand level, aircraft_type
+
+```{r}
+#Defining the binary variable 0 - Profit 1 - Loss
+airline_df$loss_factor <- ifelse(airline_df$route_classification == "Loss", 1, 0)
+
+#Train and Test - Data splitting
+set.seed(1)
+
+train_ind <- sample(1:nrow(airline_df), size = nrow(airline_df)*0.8)
+
+df_train <- airline_df[train_ind, ]
+df_test <- airline_df[-train_ind, ]
+
+#Using operational features as per EDA done earlier
+logreg.fit <- glm(loss_factor ~ Load_Factor + Flight_Hours +
+                   Route_Category + Aircraft_Capacity +
+                   Season,
+                   data = df_train,
+                   family = binomial)
+
+summary(logreg.fit)
+
+pred_prob <- predict(logreg.fit, newdata = df_test, type = "response")
+head(pred_prob)
+pred_class <- ifelse(pred_prob > 0.5, 1, 0)
+head(pred_class)
+
+table(Predicted = pred_class, Actual = df_test$loss_factor)
+
+confusionMatrix(as.factor(pred_class),
+                as.factor(df_test$loss_factor),
+                positive = "1")
+
+
+roc_obj <- roc(df_test$loss_factor, pred_prob)
+auc_value <- auc(roc_obj)
+
+plot(roc_obj,
+     col = "blue",
+     main = "ROC Curve for Route Loss Prediction")
+
+legend("bottomright",
+       legend = paste("AUC =", round(auc_value,3)))
+
+
+```
+Model 3
+
+
+```{r}
+#Defining the binary variable 0 - Profit 1 - Loss
+airline_df$loss_factor <- ifelse(airline_df$route_classification == "Loss", 1, 0)
+
+#Train and Test - Data splitting
+set.seed(1)
+
+train_ind <- sample(1:nrow(airline_df), size = nrow(airline_df)*0.8)
+
+df_train <- airline_df[train_ind, ]
+df_test <- airline_df[-train_ind, ]
+
+#Using operational features as per EDA done earlier
+logreg.fit <- glm(loss_factor ~ Load_Factor + Flight_Hours +
+                   Route_Category + Aircraft_Type + Demand_Level +
+                   Season,
+                   data = df_train,
+                   family = binomial)
+
+summary(logreg.fit)
+
+pred_prob <- predict(logreg.fit, newdata = df_test, type = "response")
+head(pred_prob)
+pred_class <- ifelse(pred_prob > 0.4, 1, 0)
+head(pred_class)
+
+table(Predicted = pred_class, Actual = df_test$loss_factor)
+
+confusionMatrix(as.factor(pred_class),
+                as.factor(df_test$loss_factor),
+                positive = "1")
+
+
+roc_obj <- roc(df_test$loss_factor, pred_prob)
+auc_value <- auc(roc_obj)
+
+png("roc_curve_model3.png")
+plot(roc_obj,
+     col = "blue",
+     main = "ROC Curve for Route Loss Prediction")
+
+legend("bottomright",
+       legend = paste("AUC =", round(auc_value,3)))
+
+dev.off()
+
+```
+
+
+```{r}
+#Decision tree
+
+library(tree)
+library(caret)
+
+# Create binary target variable - Loss or Profit
+airline_df$loss_factor <- factor(
+  ifelse(airline_df$route_classification == "Loss", "Loss", "Profit")
+)
+
+# Train-test split
+set.seed(1)
+
+train_indices <- sample(1:nrow(airline_df), nrow(airline_df) * 0.8)
+
+train <- airline_df[train_indices, ]
+test <- airline_df[-train_indices, ]
+
+# Fit classification tree
+airline.tree <- tree(
+  loss_factor ~ Load_Factor + Flight_Hours + Route_Category +
+    Aircraft_Type + Demand_Level + Season + Aircraft_Capacity,
+  data = train
+)
+
+# View tree output
+airline.tree
+
+# Plot tree
+plot(airline.tree)
+text(airline.tree, pretty = 0, cex = 0.7)
+
+# Training performance
+summary(airline.tree)
+```
+```{r}
+# Predict classes on test data
+tree.pred <- predict(airline.tree, newdata = test, type = "class")
+
+# Misclassification error rate
+tree.error <- mean(tree.pred != test$loss_factor)
+tree.error
+
+# Confusion matrix
+confusionMatrix(tree.pred, test$loss_factor, positive = "Loss")
+```
+
+```{r}
+#Decision Tree with Pruning
+set.seed(10)
+
+# Cross-validation for pruning
+cv.airline <- cv.tree(airline.tree, FUN = prune.misclass)
+
+# Plot CV deviance against tree size
+plot(cv.airline$size, cv.airline$dev, type = "b",
+     xlab = "Tree Size",
+     ylab = "Deviance",
+     main = "Cross-validation for Tree Pruning")
+
+# Best tree size
+best.size <- cv.airline$size[which.min(cv.airline$dev)]
+best.size
+
+# Prune tree
+pruned.airline.tree <- prune.misclass(airline.tree, best = best.size)
+
+# Plot pruned tree
+plot(pruned.airline.tree)
+text(pruned.airline.tree, pretty = 0, cex = 0.7)
+```
+```{r}
+# Predict using pruned tree
+pruned.pred <- predict(pruned.airline.tree, newdata = test, type = "class")
+
+# Misclassification error rate
+pruned.error <- mean(pruned.pred != test$loss_factor)
+pruned.error
+
+# Confusion matrix
+confusionMatrix(pruned.pred, test$loss_factor, positive = "Loss")
+```
+
+
+```{r}
+#Randomforest
+library(randomForest)
+
+airline_df$loss_factor <- factor(
+  ifelse(airline_df$route_classification == "Loss", "Loss", "Not_Loss")
+)
+
+set.seed(1)
+
+train_indices <- sample(1:nrow(airline_df), nrow(airline_df) * 0.8)
+
+df_train <- airline_df[train_indices, ]
+df_test <- airline_df[-train_indices, ]
+
+rf.airline <- randomForest(
+  loss_factor ~ Load_Factor + Flight_Hours +
+    Route_Category + Aircraft_Type +
+    Demand_Level + Season,
+  data = df_train,
+  mtry = 3,
+  ntree = 500,
+  importance = TRUE
+)
+
+rf.airline
+```
+
+```{r}
+rf.pred <- predict(rf.airline, newdata = df_test)
+
+mean(rf.pred != df_test$route_classification)
+
+importance(rf.airline)
+varImpPlot(rf.airline)
+```
+```{r}
+str(df_train$loss_num)
+```
+
+```{r}
+#Boosting
+library(gbm)
+
+df_train$target_num <- ifelse(
+  df_train$route_classification == "Loss", 1, 0
+)
+df_test$target_num <- ifelse(
+  df_test$route_classification == "Loss", 1, 0
+)
+set.seed(1)
+
+boost.airline <- gbm(
+  target_num ~ Load_Factor + Flight_Hours +
+    Route_Category + Aircraft_Type +
+    Demand_Level + Season,
+  data              = df_train,
+  distribution      = "bernoulli",
+  n.trees           = 1000,
+  interaction.depth = 1,
+  shrinkage         = 0.1,
+  verbose           = FALSE
+)
+
+boost.airline
+
+summary(boost.airline)
+
+boost.pred <- ifelse(
+  predict(boost.airline, newdata = df_test, n.trees = 1000) >= 0.5,
+  1, 0
+)
+
+mean(boost.pred != df_test$target_num)
+
+confusionMatrix(
+  as.factor(boost.pred),
+  as.factor(df_test$target_num),
+  positive = "1"
+)
+
+#Explore different Parameters
+set.seed(1)
+
+boost.airline2 <- gbm(
+  target_num ~ Load_Factor + Flight_Hours +
+    Route_Category + Aircraft_Type +
+    Demand_Level + Season,
+  data              = df_train,
+  distribution      = "bernoulli",
+  n.trees           = 1000,
+  interaction.depth = 2,
+  shrinkage         = 0.05,
+  verbose           = FALSE
+)
+
+boost.airline2
+
+# Test model 2
+boost.pred2 <- ifelse(
+  predict(boost.airline2, newdata = df_test, n.trees = 1000) >= 0.5,
+  1, 0
+)
+
+mean(boost.pred2 != df_test$target_num)
+
+confusionMatrix(
+  as.factor(boost.pred2),
+  as.factor(df_test$target_num),
+  positive = "1"
+)
+
+```
+```{r}
+
+boost.prob <- predict(boost.airline2, newdata = df_test, n.trees = 1000, type = "response")
+
+boost.pred_04 <- ifelse(boost.prob >= 0.4, 1, 0)
+
+confusionMatrix(
+  as.factor(boost.pred_04),
+  as.factor(df_test$target_num),
+  positive = "1"
+)
+
+thresholds <- c(0.5, 0.45, 0.4, 0.35, 0.3)
+
+for(t in thresholds){
+  pred <- ifelse(boost.prob >= t, 1, 0)
+  cm <- confusionMatrix(
+    as.factor(pred),
+    as.factor(df_test$target_num),
+    positive = "1"
+  )
+  
+  cat("\nThreshold:", t,
+      "\nAccuracy:", round(cm$overall["Accuracy"], 4),
+      "\nSensitivity:", round(cm$byClass["Sensitivity"], 4),
+      "\nSpecificity:", round(cm$byClass["Specificity"], 4),
+      "\n")
+}
+
+```
+
